@@ -20,10 +20,14 @@ ERROR = 0.01
 
 STOP_R = 10.0
 
-ANG = 0
-SPD = 1
-GRO = 2
+ANG = 0 # Angle between successive seeds
+SPD = 1 # Speed at which seeds move away from center per iteration
+GRO = 2 # Growth rate of see per iteration
+SSZ = 3 # Starting SiZe of the seed
+CEN = 4 # Central clearance - middle can be clear
+SEED_DEF_SIZE = 5 # MAX for ARRAY ITERATION and SIZING
 
+# ----------- SEED GENERATION AND SCORING ---------------
 @jit(boolean(float64[:], float64[:]))
 def check_collision(seed1, seed2):
     return seed1[R] + seed2[R] > np.sqrt(np.sum((seed1[0:2] - seed2[0:2])**2))
@@ -32,13 +36,12 @@ def check_collision(seed1, seed2):
 def dist(seed1, seed2):
     return np.sqrt(np.sum((seed1[0:2] - seed2[0:2])**2)) - (seed1[R] + seed2[R])
 
-@jit((float64[:], float64, int64 ,float64, float64, int64))
-def calc_seed(seed, angle, seed_number, velocity, growth_rate, iterations):
+@jit((float64[:], float64[:], int64, int64))
+def calc_seed(seed, seed_def, seed_number, iterations):
     my_iterations = iterations - seed_number # one seed per iteration
-    seed[X] = cos(angle * seed_number) * velocity * my_iterations
-    seed[Y] = sin(angle * seed_number) * velocity * my_iterations
-    seed[R] = growth_rate * my_iterations
-
+    seed[X] = seed_def[CEN] + cos(seed_def[ANG] * seed_number) * seed_def[SPD] * my_iterations
+    seed[Y] = seed_def[CEN] + sin(seed_def[ANG] * seed_number) * seed_def[SPD] * my_iterations
+    seed[R] = seed_def[SSZ] + seed_def[GRO] * my_iterations
 
 @jit(float64(float64[:,:]))
 def score_seeds(seeds):
@@ -56,9 +59,9 @@ def score_seeds(seeds):
 
 
 @jit(float64(float64[:,:], float64[:]))
-def generate_and_score(seeds, pos): # seeds for temporary storage
+def generate_and_score(seeds, seed_def): # seeds for temporary storage
     for i in range(NSEEDS):
-        calc_seed(seeds[i], pos[ANG], i, pos[SPD], pos[GRO], NSEEDS * 1.0) #####  !!!!!! #####
+        calc_seed(seeds[i], seed_def, i, NSEEDS)
         for j in range(i):
             if dist(seeds[i], seeds[j]) < 0.0: # Hit!
                 return 0
@@ -67,29 +70,49 @@ def generate_and_score(seeds, pos): # seeds for temporary storage
     # area of a circle with a radius that just encloses all the seeds
     return score_seeds(seeds)
 
+# ------------ ITERATIVE REFINEMENT --------------------------
+
+@jit(float64[:]())
+def plot_space():
+    x,y = 50, 50
+    space = np.zeros((x,y), dtype=np.float64)
+    seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
+    
+    gene = np.zeros(SEED_DEF_SIZE, dtype=np.float64)
+    # phi = 2.399963229
+    gene[ANG] = 2.399963229 # 0.4668980 # random() * 2*pi
+    stepx, stepy = 4.0, 4.0
+    bestx, besty = stepx/2., stepy/2.
+    best = 0.
+    for _ in range(4):
+        rangex, rangey = stepx, stepy
+        startx, starty = bestx-stepx / 2., besty-stepy / 2.
+        stepx, stepy = rangex/x, rangey/y
+
+        for i,j in product(range(x),range(y)): # numba can't cope with this
+            gene[GRO] = startx + i * stepx
+            gene[SPD] = starty + j * stepy
+            space[i][j] = generate_and_score(seeds, gene)
+            if space[i][j] > best:
+                best = space[i][j]
+                bestx, besty = gene[GRO], gene[SPD]
+        print(best, bestx / besty)
+    gene[GRO], gene[SPD] = bestx, besty
+    generate_and_score(seeds, gene)
+    return seeds
+
+# ------------- GENETIC SEARCH -----------------------------
+
 #@jit((float64[:]))
 def ransomize(gene):
     gene[ANG] = 0.4668980 # random() * 2*pi
     gene[GRO] = random() * 2
     gene[SPD] = random() * 2
 
-@jit(float64(float64[:,:], int64))
+#@jit(float64(float64[:,:], int64))
 def init_pop(pop, pop_size):
     for i in range(pop_size):
         ransomize(pop[i])
-
-def plot_space():
-    x,y = 20, 20
-    space = np.zeros((x,y), dtype=np.float64)
-    seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
-    
-    gene = np.zeros(3, dtype=np.float64)
-    gene[ANG] = 0.4668980 # random() * 2*pi
-    for i,j in product(range(x),range(y)):
-        gene[GRO] = i / x
-        gene[SPD] = j / y
-        space[i][j] = generate_and_score(seeds, gene)
-    print(space)
 
 
 #@jit(nopython=True)
@@ -147,6 +170,8 @@ def ga():
     print(scores)
     return seeds
 
+# ------------------ HILL CLIMBING ------------------------
+#
 #@jit(float64[:,:]())
 def gen_head():
     seeds = np.zeros((NSEEDS, 3))
@@ -178,7 +203,7 @@ def gen_head():
         pos += vec
         # Position all the seeds but maybe generate a hit
         for i in range(NSEEDS):
-            calc_seed(seeds[i], pos[ANG], i, pos[SPD], pos[GRO], iterations)
+            calc_seed(seeds[i], pos, i, iterations)
             hit = False
             for j in range(i):
                 if dist(seeds[i], seeds[j]) < 0.0:
@@ -209,187 +234,7 @@ def gen_head():
     print(score)
     return seeds
 
-@jit(float64(float64[:], float64))
-def radius_error(seed, radius):
-    return radius - np.sqrt(np.sum(seed[0:2]**2))
-
-@jit(float64(float64[:], float64[:]))
-def collision_error(seed1, seed2):
-    return np.sqrt(np.sum((seed1[0:2] - seed2[0:2])**2)) - (seed1[R] + seed2[R])
-
-@jit((float64[:], float64[:], float64, int64))
-def minimize_error(seed, seed2, radius, err_selector):
-    scale = 1.0
-    error = radius_error(seed, radius) if err_selector == R else collision_error(seed, seed2)
-    while abs(error) > ERROR:
-        scale *= -0.5
-        prev_error = error * 2
-        while abs(prev_error) > abs(error) and abs(error) > ERROR:
-            seed[0:2] += seed[VX:VX+2] * scale
-            prev_error = error
-            error = radius_error(seed, radius) if err_selector == R else collision_error(seed, seed2)
-
-@jit(float64(float64[:,:], int64, float64))
-def iterate3(seeds, nseeds, max_radius):
-    acc = np.array([0,0], dtype=np.float64)
-
-    for i1 in range(nseeds):
-        seeds[i1][R] += 0.01
-        if seeds[i1][F] != 0.0:
-            seeds[i1][R] += 0.01
-            continue
-        seeds[i1][0:2] += seeds[i1][VX:VX+2]
-
-        #for i2 in range(nseeds):
-        #    if i1 == i2: continue
-        #    # don't collide with moving seeds
-        #    if seeds[i2][F] == 0.0: continue
-
-        #    delta = seeds[i1][0:2] - seeds[i2][0:2]
-        #    d = np.sqrt(np.sum(delta**2))
-        #    # Collision with fixed seed -> fix
-        #    if d < seeds[i1][R] + seeds[i2][R]:
-        #        seeds[i1][F] = 1.0
-        #        minimize_error(seeds[i1], seeds[i2], max_radius, 0)
-        #        break
-
-        # no more motion for fixed seeds
-        #if seeds[i1][F] != 0.0: continue
-
-        #if max_radius <= np.sqrt(np.sum(seeds[i1][0:2]**2)):
-        #    seeds[i1][F] = 1.0
-        #    minimize_error(seeds[i1], seeds[i1], max_radius, R)
-        
-    return max_radius
-
-@jit(float64[:,:](int64))
-def add_seeds3(nseeds):
-    seeds = np.zeros((nseeds, 6))
-    angle = 0.0
-    #angle_d = 123.1 * pi/180.0
-    #angle_d = random() * pi #/ 16
-    angle_d = 0.4668980
-    v = 0.2 * random() #R_SEED*2 / (2*pi / angle_d)
-
-    print(angle_d, v)
-    for i in range(nseeds):
-        angle += angle_d
-        seeds[i][X] = cos(angle) * ZERO_POS_SCALE
-        seeds[i][Y] = sin(angle) * ZERO_POS_SCALE
-        seeds[i][R] = R_SEED
-        seeds[i][F] = 0.0
-        seeds[i][VX] = cos(angle) * v
-        seeds[i][VY] = sin(angle) * v
-        iterate3(seeds, i+1, STOP_R)
-    return seeds
-
-np.seterr(all='raise')
-@jit(float64(float64[:,:], int64, float64))
-def iterate2(seeds, nseeds, radius):
-    cent = np.array([0,0], dtype=np.float64)
-
-    cent[X] = cent[Y] = 0.0
-    for i in range(nseeds):
-        cent += seeds[i][0:2]
-    cent /= nseeds
-
-    for i in range(nseeds):
-        delta = seeds[i][0:2] - cent
-        d = np.sqrt(np.sum(delta**2))
-        if d != 0.0:
-            seeds[i][0:2] += ITERATE_STEP * delta / d
-
-    return radius
-
-@jit(float64[:,:](int64))
-def add_seeds2(nseeds):
-    seeds = np.zeros((nseeds, 3))
-    angle = random() * 2*pi
-    seeds[0][X] = 0 #cos(angle) * R_SEED
-    seeds[0][Y] = 0.5 #sin(angle) * R_SEED
-    seeds[0][R] = R_SEED
-    radius = 2*R_SEED
-
-    for i in range(1,nseeds):
-        angle = random() * 2*pi
-        seeds[i][X] = cos(angle) * ZERO_POS_SCALE
-        seeds[i][Y] = sin(angle) * ZERO_POS_SCALE
-        seeds[i][R] = R_SEED
-        #while radius > np.sqrt(np.sum(seeds[i][0:2]**2)):
-        for _ in range(10):
-            radius = iterate2(seeds, i+1, radius)
-    return seeds
-
-@jit(float64(float64[:,:], int64, float64))
-def iterate(seeds, nseeds, max_radius):
-    acc = np.array([0,0], dtype=np.float64)
-
-    for i1 in range(nseeds):
-        if seeds[i1][F] != 0.0: continue
-
-        acc[X] = acc[Y] = 0.0
-        for i2 in range(nseeds):
-            if i1 == i2: continue
-            delta = seeds[i1][0:2] - seeds[i2][0:2]
-            d = np.sqrt(np.sum(delta**2))
-            # Collision with fixed seed -> fix
-            if seeds[i2][F] != 0.0 and d < seeds[i1][R] + seeds[i2][R]:
-                seeds[i1][F] = 1.0
-
-                scale = 1.0
-                error = d - (seeds[i1][R] + seeds[i2][R])
-                prev_error = error * 2
-                while abs(error) > ERROR:
-                    scale *= -0.5
-                    prev_error = error * 2
-                    while abs(prev_error) > abs(error):
-                        seeds[i1][0:2] += seeds[i1][VX:VX+2] * scale
-
-                        delta = seeds[i1][0:2] - seeds[i2][0:2]
-                        d = np.sqrt(np.sum(delta**2))
-                        prev_error = error
-                        error = d - (seeds[i1][R] + seeds[i2][R])
-
-                # Adust the radius
-                max_radius = np.sqrt(np.sum(seeds[i1][0:2]**2))
-                break
-
-            acc += delta / d**2
-
-        if acc[X] + acc[Y] != 0.0:
-            acc /= np.sqrt(np.sum(acc**2))
-                
-            seeds[i1][VX:VX+2] = ITERATE_STEP * acc
-            seeds[i1][0:2] += seeds[i1][VX:VX+2]
-
-        if max_radius <= np.sqrt(np.sum(seeds[i1][0:2]**2)):
-            seeds[i1][F] = 1.0
-        
-        return max_radius
-
-@jit(float64[:,:](int64))
-def add_seeds(nseeds):
-    seeds = np.zeros((nseeds, 6))
-    angle = random() * 2*pi
-    seeds[0][X] = cos(angle) * R_SEED * 2.1
-    seeds[0][Y] = sin(angle) * R_SEED * 2.1
-    seeds[0][R] = R_SEED
-    seeds[0][F] = 0.0
-    radius = STOP_R
-    for i in range(1,nseeds):
-        print(i)
-        angle = random() * 2*pi
-        seeds[i][X] = cos(angle) * ZERO_POS_SCALE
-        seeds[i][Y] = sin(angle) * ZERO_POS_SCALE
-        seeds[i][R] = R_SEED
-        seeds[i][F] = 0.0
-        # Make sure the seed is clear of the starting area
-        while R_SEED + ZERO_POS_SCALE >= np.sqrt(np.sum(seeds[i][0:2]**2)):
-            if seeds[i][F] > 0.0:
-                break
-            radius = iterate(seeds, i+1, radius)
-    return seeds
-
+# -------------------- DRAWING AND MAIN -----------------
 def draw(seeds, drawing):
     minx = miny = 999999
     maxx = maxy = -999999
@@ -408,10 +253,9 @@ def draw(seeds, drawing):
                     width=maxx-minx, height=maxy-miny)
 
 def main():
-    plot_space()
-    return
+    seeds = plot_space()
     #seeds = add_seeds3(NSEEDS)
-    seeds = ga()
+    #seeds = ga()
     dwg = svg.Drawing('test.svg')
     dwg.set_desc(title='Seeds', desc='My seed packet')
     draw(seeds, dwg)
