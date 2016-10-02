@@ -39,8 +39,8 @@ def dist(seed1, seed2):
 @jit((float64[:], float64[:], int64, int64))
 def calc_seed(seed, seed_def, seed_number, iterations):
     my_iterations = iterations - seed_number # one seed per iteration
-    seed[X] = seed_def[CEN] + cos(seed_def[ANG] * seed_number) * seed_def[SPD] * my_iterations
-    seed[Y] = seed_def[CEN] + sin(seed_def[ANG] * seed_number) * seed_def[SPD] * my_iterations
+    seed[X] = cos(seed_def[ANG] * seed_number) * (seed_def[CEN] + seed_def[SPD] * my_iterations)
+    seed[Y] = sin(seed_def[ANG] * seed_number) * (seed_def[CEN] + seed_def[SPD] * my_iterations)
     seed[R] = seed_def[SSZ] + seed_def[GRO] * my_iterations
 
 @jit(float64(float64[:,:]))
@@ -74,30 +74,33 @@ def generate_and_score(seeds, seed_def): # seeds for temporary storage
 
 @jit(float64[:]())
 def plot_space():
-    x,y = 50, 50
-    space = np.zeros((x,y), dtype=np.float64)
+    x,y,z = 20, 50, 50
+    space = np.zeros((x,y,z), dtype=np.float64)
     seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
     
     gene = np.zeros(SEED_DEF_SIZE, dtype=np.float64)
     # phi = 2.399963229
     gene[ANG] = 2.399963229 # 0.4668980 # random() * 2*pi
-    stepx, stepy = 4.0, 4.0
-    bestx, besty = stepx/2., stepy/2.
+    gene[SSZ] = 10.0
+    gene[CEN] = 20.0
+    stepx, stepy, stepz = 2*pi, 4.0, 4.0
+    bestx, besty, bestz = stepx/2., stepy/2., stepz/2.
     best = 0.
     for _ in range(4):
-        rangex, rangey = stepx, stepy
-        startx, starty = bestx-stepx / 2., besty-stepy / 2.
+        rangex, rangey, rangez = stepx, stepy, stepz
+        startx, starty, startz = bestx - stepx/2., besty - stepy/2., bestz - stepz/2.
         stepx, stepy = rangex/x, rangey/y
 
-        for i,j in product(range(x),range(y)): # numba can't cope with this
-            gene[GRO] = startx + i * stepx
-            gene[SPD] = starty + j * stepy
-            space[i][j] = generate_and_score(seeds, gene)
-            if space[i][j] > best:
-                best = space[i][j]
-                bestx, besty = gene[GRO], gene[SPD]
-        print(best, bestx / besty)
-    gene[GRO], gene[SPD] = bestx, besty
+        for i,j,k in product(range(x),range(y),range(z)): # numba can't cope with this in nopython mode
+            gene[ANG] = startx + i * stepx
+            gene[GRO] = starty + j * stepy
+            gene[SPD] = startz + k * stepz
+            space[i][j][k] = generate_and_score(seeds, gene)
+            if space[i][j][k] > best:
+                best = space[i][j][k]
+                bestx, besty, bestz = gene[ANG], gene[GRO], gene[SPD]
+        print(best, bestx, besty, bestz)
+    gene[ANG], gene[GRO], gene[SPD] = bestx, besty, bestz
     generate_and_score(seeds, gene)
     return seeds
 
@@ -105,27 +108,28 @@ def plot_space():
 
 #@jit((float64[:]))
 def ransomize(gene):
-    gene[ANG] = 0.4668980 # random() * 2*pi
-    gene[GRO] = random() * 2
-    gene[SPD] = random() * 2
+    pass
 
-#@jit(float64(float64[:,:], int64))
+@jit(float64(float64[:,:], int64))
 def init_pop(pop, pop_size):
     for i in range(pop_size):
-        ransomize(pop[i])
+        pop[i][ANG] = 0.4668980 # random() * 2*pi
+        pop[i][GRO] = random() * 2
+        pop[i][SPD] = random() * 2
 
 
-#@jit(nopython=True)
+@jit()#float64[:])
 def ga():
     seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
     pop_size = 1000
-    pop = np.zeros((pop_size, 3), dtype=np.float64)
-    next_pop = np.zeros((pop_size, 3), dtype=np.float64)
+    pop = np.zeros((pop_size, SEED_DEF_SIZE), dtype=np.float64)
+    next_pop = np.zeros((pop_size, SEED_DEF_SIZE), dtype=np.float64)
     init_pop(pop, pop_size)
 
     scores = np.zeros(pop_size, dtype=np.float64)
 
-    while True:
+    best = -1.
+    while True: # break happens in the generate_and_score section
         for i in range(pop_size):
             scores[i] = generate_and_score(seeds, pop[i])
 
@@ -134,11 +138,11 @@ def ga():
         for i in range(pop_size):
             best_idx = i if scores[i] > best else best_idx
             best = scores[i] if scores[i] > best else best
-        if best > 0.8:
+        if best > 0.4:
             generate_and_score(seeds, pop[best_idx])
             print(best, best_idx)
             return seeds
-        print(best)
+        print(best, pop[best_idx])
 
         total = 0.
         for i in range(pop_size):
@@ -158,16 +162,22 @@ def ga():
 
             next_pop[i] = (pop[sel1] + pop[sel2]) / 2.
 
-        tmp = pop
-        pop = next_pop
-        next_pop = tmp
 
+        # New blood
         for i in range(int(pop_size / 10)):
-            ransomize(pop[i])
+            next_pop[i][GRO] = random() * 2
+            next_pop[i][SPD] = random() * 2
+        # Mutation
+        for i in range(int(pop_size / 10), 2*int(pop_size / 10)):
+            #next_pop[i][ANG] += 0.01 * (0.5 - random())
+            next_pop[i][GRO] += 0.1 * (0.5 - random())
+            next_pop[i][SPD] += 0.1 * (0.5 - random())
+
         # Keep the best
-        pop[0] = next_pop[best_idx]
+        next_pop[0] = pop[best_idx]
+
+        pop, next_pop = next_pop, pop
             
-    print(scores)
     return seeds
 
 # ------------------ HILL CLIMBING ------------------------
@@ -253,9 +263,9 @@ def draw(seeds, drawing):
                     width=maxx-minx, height=maxy-miny)
 
 def main():
-    seeds = plot_space()
+    #seeds = plot_space()
     #seeds = add_seeds3(NSEEDS)
-    #seeds = ga()
+    seeds = ga()
     dwg = svg.Drawing('test.svg')
     dwg.set_desc(title='Seeds', desc='My seed packet')
     draw(seeds, dwg)
