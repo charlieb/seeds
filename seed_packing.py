@@ -2,9 +2,11 @@ import numpy as np
 from random import random
 import svgwrite as svg
 from math import pi, sin, cos
+import numba as nb
 from numba import jit, float64, int64, boolean
 from itertools import product
 import time
+import concurrent.futures
 
 X = 0
 Y = 1
@@ -29,22 +31,22 @@ CEN = 4 # Central clearance - middle can be clear
 SEED_DEF_SIZE = 5 # MAX for ARRAY ITERATION and SIZING
 
 # ----------- SEED GENERATION AND SCORING ---------------
-@jit(boolean(float64[:], float64[:]))
+@jit(boolean(float64[:], float64[:]), nopython=True, nogil=True)
 def check_collision(seed1, seed2):
     return seed1[R] + seed2[R] > np.sqrt(np.sum((seed1[0:2] - seed2[0:2])**2))
 
-@jit(float64(float64[:], float64[:]))
+@jit(float64(float64[:], float64[:]), nopython=True, nogil=True)
 def dist(seed1, seed2):
     return np.sqrt(np.sum((seed1[0:2] - seed2[0:2])**2)) - (seed1[R] + seed2[R])
 
-@jit((float64[:], float64[:], int64, int64))
+@jit((float64[:], float64[:], int64, int64), nopython=True, nogil=True)
 def calc_seed(seed, seed_def, seed_number, iterations):
     my_iterations = iterations - seed_number # one seed per iteration
     seed[X] = cos(seed_def[ANG] * seed_number) * (seed_def[CEN] + seed_def[SPD] * my_iterations)
     seed[Y] = sin(seed_def[ANG] * seed_number) * (seed_def[CEN] + seed_def[SPD] * my_iterations)
     seed[R] = seed_def[SSZ] + seed_def[GRO] * my_iterations
 
-@jit(float64(float64[:,:]))
+@jit(float64(float64[:,:]), nopython=True, nogil=True)
 def score_seeds(seeds):
     max_r = -1.
     area = 0.
@@ -59,7 +61,7 @@ def score_seeds(seeds):
         return 0
 
 
-@jit(float64(float64[:,:], float64[:]))
+@jit(float64(float64[:,:], float64[:]), nopython=True, nogil=True)
 def generate_and_score(seeds, seed_def): # seeds for temporary storage
     for i in range(NSEEDS):
         calc_seed(seeds[i], seed_def, i, NSEEDS)
@@ -70,6 +72,11 @@ def generate_and_score(seeds, seed_def): # seeds for temporary storage
     # fitness function is the difference between the covered area and the
     # area of a circle with a radius that just encloses all the seeds
     return score_seeds(seeds)
+
+@jit(nb.types.Tuple((int64, float64))(float64[:], int64), nopython=True, nogil=True)
+def mt_gen_and_score(gene, i):
+    seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
+    return i, generate_and_score(seeds, gene)
 
 # ------------ ITERATIVE REFINEMENT --------------------------
 
@@ -91,6 +98,12 @@ def plot_space():
         rangex, rangey, rangez = stepx, stepy, stepz
         startx, starty, startz = bestx - stepx/2., besty - stepy/2., bestz - stepz/2.
         stepx, stepy = rangex/x, rangey/y
+
+#        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+#            gas = {executor.submit(mt_gen_and_score, pop[i], i) for i in range(pop_size)}
+#            for future in concurrent.futures.as_completed(gas):
+#                (i, score) = future.result()
+#                scores[i] = score
 
         for i,j,k in product(range(x),range(y),range(z)): # numba can't cope with this in nopython mode
             #gene[ANG] = startx + i * stepx
@@ -119,7 +132,7 @@ def init_pop(pop, pop_size):
         pop[i][SPD] = random() * 2
 
 
-@jit()#float64[:])
+#@jit()#float64[:])
 def ga():
     seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
     pop_size = 1000
@@ -131,8 +144,11 @@ def ga():
 
     best = -1.
     while True: # break happens in the generate_and_score section
-        for i in range(pop_size):
-            scores[i] = generate_and_score(seeds, pop[i])
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            gas = {executor.submit(mt_gen_and_score, pop[i], i) for i in range(pop_size)}
+            for future in concurrent.futures.as_completed(gas):
+                (i, score) = future.result()
+                scores[i] = score
 
         best = -1.
         best_idx = -1
@@ -264,9 +280,9 @@ def draw(seeds, drawing):
                     width=maxx-minx, height=maxy-miny)
 
 def main():
-    seeds = plot_space()
+    #seeds = plot_space()
     #seeds = add_seeds3(NSEEDS)
-    #seeds = ga()
+    seeds = ga()
     dwg = svg.Drawing('test.svg')
     dwg.set_desc(title='Seeds', desc='My seed packet')
     draw(seeds, dwg)
