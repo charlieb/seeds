@@ -4,6 +4,7 @@ import svgwrite as svg
 from math import pi, sin, cos
 from numba import jit, float64, int64, boolean
 from itertools import product
+import time
 
 X = 0
 Y = 1
@@ -74,7 +75,7 @@ def generate_and_score(seeds, seed_def): # seeds for temporary storage
 
 @jit(float64[:]())
 def plot_space():
-    x,y,z = 20, 50, 50
+    x,y,z = 1, 50, 50
     space = np.zeros((x,y,z), dtype=np.float64)
     seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
     
@@ -92,7 +93,7 @@ def plot_space():
         stepx, stepy = rangex/x, rangey/y
 
         for i,j,k in product(range(x),range(y),range(z)): # numba can't cope with this in nopython mode
-            gene[ANG] = startx + i * stepx
+            #gene[ANG] = startx + i * stepx
             gene[GRO] = starty + j * stepy
             gene[SPD] = startz + k * stepz
             space[i][j][k] = generate_and_score(seeds, gene)
@@ -263,9 +264,9 @@ def draw(seeds, drawing):
                     width=maxx-minx, height=maxy-miny)
 
 def main():
-    #seeds = plot_space()
+    seeds = plot_space()
     #seeds = add_seeds3(NSEEDS)
-    seeds = ga()
+    #seeds = ga()
     dwg = svg.Drawing('test.svg')
     dwg.set_desc(title='Seeds', desc='My seed packet')
     draw(seeds, dwg)
@@ -273,4 +274,8 @@ def main():
 
 
 if __name__ == '__main__':
+    t0 = time.time()
     main()
+    t1 = time.time()
+
+    print("Elapsed:", t1-t0)
