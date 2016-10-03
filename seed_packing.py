@@ -89,15 +89,15 @@ def plot_space():
     gene = np.zeros(SEED_DEF_SIZE, dtype=np.float64)
     # phi = 2.399963229
     gene[ANG] = 2.399963229 # 0.4668980 # random() * 2*pi
-    gene[SSZ] = 10.0
-    gene[CEN] = 20.0
+    gene[SSZ] = 0.0
+    gene[CEN] = 0.0
     stepx, stepy, stepz = 2*pi, 4.0, 4.0
     bestx, besty, bestz = stepx/2., stepy/2., stepz/2.
     best = 0.
     for _ in range(4):
         rangex, rangey, rangez = stepx, stepy, stepz
         startx, starty, startz = bestx - stepx/2., besty - stepy/2., bestz - stepz/2.
-        stepx, stepy = rangex/x, rangey/y
+        stepx, stepy, stepz = rangex/x, rangey/y, rangez/z
 
 #        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
 #            gas = {executor.submit(mt_gen_and_score, pop[i], i) for i in range(pop_size)}
@@ -280,9 +280,9 @@ def draw(seeds, drawing):
                     width=maxx-minx, height=maxy-miny)
 
 def main():
-    #seeds = plot_space()
+    seeds = plot_space()
     #seeds = add_seeds3(NSEEDS)
-    seeds = ga()
+    #seeds = ga()
     dwg = svg.Drawing('test.svg')
     dwg.set_desc(title='Seeds', desc='My seed packet')
     draw(seeds, dwg)
