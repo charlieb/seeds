@@ -73,48 +73,66 @@ def generate_and_score(seeds, seed_def): # seeds for temporary storage
     # area of a circle with a radius that just encloses all the seeds
     return score_seeds(seeds)
 
-@jit(nb.types.Tuple((int64, float64))(float64[:], int64), nopython=True, nogil=True)
-def mt_gen_and_score(gene, i):
+@jit(float64(float64[:]), nopython=True, nogil=True)
+def mt_gen_and_score(gene):
     seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
-    return i, generate_and_score(seeds, gene)
+    return generate_and_score(seeds, gene)
 
 # ------------ ITERATIVE REFINEMENT --------------------------
 
-@jit(float64[:]())
+#@jit()
+def gene_ranges(nsteps, starts, ranges):
+    steps = [rng / nst for nst, sta, rng in zip(nsteps, starts, ranges)]
+    for coords in product(*[range(x+1) for x in nsteps]):
+        gene = np.zeros(SEED_DEF_SIZE, dtype=np.float64)
+        for i, _ in enumerate(nsteps):
+            gene[i] = starts[i] + coords[i] * steps[i]
+        yield gene
+
+#@jit(float64[:]())
 def plot_space():
     x,y,z = 1, 50, 50
     space = np.zeros((x,y,z), dtype=np.float64)
     seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
     
-    gene = np.zeros(SEED_DEF_SIZE, dtype=np.float64)
-    # phi = 2.399963229
-    gene[ANG] = 2.399963229 # 0.4668980 # random() * 2*pi
-    gene[SSZ] = 0.0
-    gene[CEN] = 0.0
-    stepx, stepy, stepz = 2*pi, 4.0, 4.0
-    bestx, besty, bestz = stepx/2., stepy/2., stepz/2.
+    #gene = np.zeros(SEED_DEF_SIZE, dtype=np.float64)
+    phi = 2.399963229
+    rangex, rangey, rangez = phi, 4.0, 4.0
+    bestx, besty, bestz = 0,0,0
+    startx, starty, startz = 0.,0.,0.
     best = 0.
-    for _ in range(4):
-        rangex, rangey, rangez = stepx, stepy, stepz
-        startx, starty, startz = bestx - stepx/2., besty - stepy/2., bestz - stepz/2.
-        stepx, stepy, stepz = rangex/x, rangey/y, rangez/z
+    better = False
+    first_iteration = True
+    print((x,y,z), (startx, starty, startz), (rangex, rangey, rangez))
+    for _ in range(10):
+        if not first_iteration:
+            if not better and not first_iteration: # We didnt find anything > 0 so increase search resolution
+                x,y,z = x*2, y*2, z*2
+                print('No best, doubling resolution:', x,y,z)
+            else:
+                startx, starty, startz = bestx - rangex/x, besty - rangey/y, bestz - rangez/z
+                rangex, rangey, rangez = 2*rangex/x, 2*rangey/y, 2*rangez/z
+                print((x,y,z), (startx, starty, startz), (rangex, rangey, rangez))
+        print((startx, startx + rangex), (starty, starty + rangey), (startz, startz + rangez))
+        first_iteration = False
+        better = False
 
-#        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-#            gas = {executor.submit(mt_gen_and_score, pop[i], i) for i in range(pop_size)}
-#            for future in concurrent.futures.as_completed(gas):
-#                (i, score) = future.result()
-#                scores[i] = score
+        #with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        #    gas = {executor.submit(mt_gen_and_score, pop[i], i) for i in range(pop_size)}
+        #    for future in concurrent.futures.as_completed(gas):
+        #        (i, score) = future.result()
+        #        scores[i] = score
 
-        for i,j,k in product(range(x),range(y),range(z)): # numba can't cope with this in nopython mode
-            #gene[ANG] = startx + i * stepx
-            gene[GRO] = starty + j * stepy
-            gene[SPD] = startz + k * stepz
-            space[i][j][k] = generate_and_score(seeds, gene)
-            if space[i][j][k] > best:
-                best = space[i][j][k]
-                bestx, besty, bestz = gene[ANG], gene[GRO], gene[SPD]
+        for gene in gene_ranges((x,y,z), (startx, starty, startz), (rangex, rangey, rangez)):
+            score = mt_gen_and_score(gene)
+            print(score, gene)
+            if score > best:
+                best = score
+                bestx, besty, bestz = gene[ANG], gene[SPD], gene[GRO]
+                better = True
+                #print(score, gene)
         print(best, bestx, besty, bestz)
-    gene[ANG], gene[GRO], gene[SPD] = bestx, besty, bestz
+    gene[ANG], gene[SPD], gene[GRO] = bestx, besty, bestz
     generate_and_score(seeds, gene)
     return seeds
 
@@ -145,10 +163,10 @@ def ga():
     best = -1.
     while True: # break happens in the generate_and_score section
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            gas = {executor.submit(mt_gen_and_score, pop[i], i) for i in range(pop_size)}
+            gas = {executor.submit(mt_gen_and_score, pop[i]): i for i in range(pop_size)}
             for future in concurrent.futures.as_completed(gas):
-                (i, score) = future.result()
-                scores[i] = score
+                i = gas[future]
+                scores[i] = future.result()
 
         best = -1.
         best_idx = -1
