@@ -81,59 +81,61 @@ def mt_gen_and_score(gene):
 # ------------ ITERATIVE REFINEMENT --------------------------
 
 #@jit()
-def gene_ranges(nsteps, starts, ranges):
-    steps = [rng / nst for nst, sta, rng in zip(nsteps, starts, ranges)]
-    for coords in product(*[range(x+1) for x in nsteps]):
+def gene_ranges(nsteps, starts, ranges, fixed):
+    steps = [0 if fix else rng / nst for nst, sta, rng, fix in zip(nsteps, starts, ranges, fixed)]
+    for coords in product(*[range(1 if fix else x+1) for x, fix in zip(nsteps, fixed)]):
         gene = np.zeros(SEED_DEF_SIZE, dtype=np.float64)
-        for i, _ in enumerate(nsteps):
+        for i, _ in enumerate(nsteps): # for each dimension
             gene[i] = starts[i] + coords[i] * steps[i]
         yield gene
 
 #@jit(float64[:]())
 def plot_space():
-    x,y,z = 1, 50, 50
-    space = np.zeros((x,y,z), dtype=np.float64)
-    seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
+    x,y,z = 40, 40, 40
     
     #gene = np.zeros(SEED_DEF_SIZE, dtype=np.float64)
     phi = 2.399963229
-    rangex, rangey, rangez = phi, 4.0, 4.0
+    rangex, rangey, rangez = pi, 4.0, 4.0
     bestx, besty, bestz = 0,0,0
     startx, starty, startz = 0.,0.,0.
     best = 0.
     better = False
     first_iteration = True
     print((x,y,z), (startx, starty, startz), (rangex, rangey, rangez))
+
+    best_gene = np.zeros(SEED_DEF_SIZE, dtype=np.float64)
+
     for _ in range(10):
         if not first_iteration:
             if not better and not first_iteration: # We didnt find anything > 0 so increase search resolution
                 x,y,z = x*2, y*2, z*2
                 print('No best, doubling resolution:', x,y,z)
             else:
-                startx, starty, startz = bestx - rangex/x, besty - rangey/y, bestz - rangez/z
+                startx, starty, startz = max(0,bestx - rangex/x), max(0, besty - rangey/y), max(0, bestz - rangez/z)
                 rangex, rangey, rangez = 2*rangex/x, 2*rangey/y, 2*rangez/z
-                print((x,y,z), (startx, starty, startz), (rangex, rangey, rangez))
         print((startx, startx + rangex), (starty, starty + rangey), (startz, startz + rangez))
         first_iteration = False
         better = False
 
-        #with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        #    gas = {executor.submit(mt_gen_and_score, pop[i], i) for i in range(pop_size)}
-        #    for future in concurrent.futures.as_completed(gas):
-        #        (i, score) = future.result()
-        #        scores[i] = score
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            genes = {executor.submit(mt_gen_and_score, gene): gene 
+                        for gene in gene_ranges((x,y,z, 1,1), 
+                                                (startx, starty, startz, 1., 2.), 
+                                                (rangex, rangey, rangez, 0.0, 0.0),
+                                                (False, False, False, True, True))}
+            for future in concurrent.futures.as_completed(genes):
+                score = future.result()
+                if score > best:
+                    best = score
+                    best_gene = genes[future]
+                    bestx, besty, bestz = best_gene[ANG], best_gene[SPD], best_gene[GRO]
+                    better = True
+                    print(score, best_gene)
 
-        for gene in gene_ranges((x,y,z), (startx, starty, startz), (rangex, rangey, rangez)):
-            score = mt_gen_and_score(gene)
-            print(score, gene)
-            if score > best:
-                best = score
-                bestx, besty, bestz = gene[ANG], gene[SPD], gene[GRO]
-                better = True
-                #print(score, gene)
-        print(best, bestx, besty, bestz)
-    gene[ANG], gene[SPD], gene[GRO] = bestx, besty, bestz
-    generate_and_score(seeds, gene)
+        print(best, best_gene)
+
+    seeds = np.zeros((NSEEDS, 3), dtype=np.float64)
+    generate_and_score(seeds, best_gene)
     return seeds
 
 # ------------- GENETIC SEARCH -----------------------------
